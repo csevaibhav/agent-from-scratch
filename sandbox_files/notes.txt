@@ -1,0 +1,1 @@
+Vaibhav's 12-week roadmap: Python -> async -> LLM APIs -> agents.
