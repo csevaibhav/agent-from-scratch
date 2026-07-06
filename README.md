@@ -20,6 +20,7 @@ Frameworks like LangGraph are genuinely useful, but they hide the mechanics of h
 | `step6_async.py` | Async execution | Independent subtasks run concurrently via `asyncio.gather()`; dependent subtasks wait in correct order (dependency-wave execution) |
 | `step7_observability.py` + `analyze_logs.py` | Observability | Every event (tool call, retry, failure, subtask/session timing) logged as structured JSON Lines; a separate script queries the logs for stats across runs |
 | `langgraph_equivalent.py` | Framework comparison | The same reasoning loop rebuilt in LangGraph, for a direct side-by-side |
+| `api.py` | Deployment | Wraps the agent as a real HTTP service using FastAPI — a request comes in over `/agent`, the agent plans + executes, and structured JSON comes back, instead of running a script and reading a terminal |
 
 ## Setup
 
@@ -32,7 +33,7 @@ ollama pull llama3.1
 ```bash
 python -m venv venv
 venv\Scripts\activate        # Windows
-pip install ollama ddgs
+pip install -r requirements.txt
 ```
 
 **3. Run any step:**
@@ -69,9 +70,43 @@ After building the loop by hand, `langgraph_equivalent.py` rebuilds the same rea
 
 **Not replaced by any framework:** the actual tool logic, the prompts, and the retry/planning/failure-classification decisions from steps 4–6 — those are still yours to design either way. Frameworks provide the plumbing; the reasoning about failure modes and task decomposition is the actual engineering work.
 
+## Running as an API
+
+`api.py` wraps the same planning + async execution logic from steps 4–7 behind a real HTTP interface using [FastAPI](https://fastapi.tiangolo.com/), so the agent can be called by another program instead of run manually as a script.
+
+**Install the extra dependencies:**
+```bash
+pip install fastapi uvicorn
+```
+
+**Start the server:**
+```bash
+uvicorn api:app --reload
+```
+`--reload` restarts the server automatically on code changes — useful during development, drop it for a production run.
+
+**Try it interactively:** open `http://127.0.0.1:8000/docs` in a browser. FastAPI auto-generates a full interactive interface from the code — no separate tool needed to test requests.
+
+**Or call it directly:**
+```bash
+curl -X POST http://127.0.0.1:8000/agent \
+  -H "Content-Type: application/json" \
+  -d "{\"request\": \"Calculate 145 * 23, then calculate 900 / 12\"}"
+```
+
+**Endpoints:**
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/agent` | POST | Submit a request; returns the plan's subtask breakdown, per-subtask status, and results as structured JSON |
+| `/health` | GET | Basic liveness check |
+| `/logs/recent` | GET | Returns the most recent structured log entries (same data as `analyze_logs.py`, retrievable over HTTP) |
+
+Request/response shapes are validated automatically via Pydantic models — malformed requests are rejected with a clear error before any agent logic runs, rather than failing partway through.
+
 ## Stack
 
-Python 3.12 · Ollama (`llama3.1`, local) · `ddgs` (web search) · `asyncio` · LangGraph (comparison only)
+Python 3.12 · Ollama (`llama3.1`, local) · `ddgs` (web search) · `asyncio` · FastAPI + Uvicorn (API layer) · LangGraph (comparison only)
 
 ## Author
 
