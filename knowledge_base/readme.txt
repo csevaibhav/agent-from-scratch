@@ -22,9 +22,6 @@ Frameworks like LangGraph are genuinely useful, but they hide the mechanics of h
 | `langgraph_equivalent.py` | Framework comparison | The same reasoning loop rebuilt in LangGraph, for a direct side-by-side |
 | `api.py` | Deployment | Wraps the agent as a real HTTP service using FastAPI — a request comes in over `/agent`, the agent plans + executes, and structured JSON comes back, instead of running a script and reading a terminal |
 | `mcp_server.py` + `test_mcp_server.py` | Standardized tool access | Exposes the calculator, memory, and file-reader tools via the real [Model Context Protocol](https://modelcontextprotocol.io/) using Anthropic's official Python SDK — tested standalone, then connected to and verified working in Claude Desktop |
-| `rag_ingest.py` | RAG — ingestion | Chunks local `.txt` documents, embeds them via Ollama's `nomic-embed-text`, and stores them in a persistent ChromaDB vector store on disk |
-| `rag_agent.py` | RAG — standalone demo | A minimal agent with `search_documents` as a tool, to see semantic retrieval working in isolation before merging it into the full agent |
-| `step8_rag_agent.py` | RAG — full integration | `search_documents` added as a tool inside the complete step 7 agent (planning + async + guardrails + observability) — retrieval is just another entry in the same tool-dispatch dict, no special-casing required |
 
 ## Setup
 
@@ -61,7 +58,6 @@ Building from scratch surfaces failure modes a framework tutorial would never sh
 - **Model synthesis errors despite correct tool results** — on more than one run, the model's final answer contradicted a tool result that was correct and present in its own context (e.g. claiming a file "wasn't provided" when its content had just been read successfully). A reminder that tool execution succeeding does not guarantee the final synthesized answer is correct — always worth verifying both independently.
 - **Relative paths break when a different process launches your script** — `mcp_server.py` originally used `Path("./long_term_memory.json")`. This worked fine when running the file directly, but silently failed when Claude Desktop launched it as a subprocess from its own working directory — it was reading/writing a *different* file location entirely, with no error, just apparently "not remembering" anything. Fixed by anchoring paths to the script's own location (`Path(__file__).resolve().parent`) instead of the current working directory.
 - **Tool selection ambiguity between overlapping capabilities** — after connecting the MCP server to Claude Desktop, asking it to "remember" something was answered by Claude's own *native* memory feature instead of the connected `remember` MCP tool, since both could plausibly satisfy the request. Confirmed by checking the actual `long_term_memory.json` file on disk (unchanged) versus Claude's response (which referenced its native memory, not the tool). Resolved by explicitly naming both the tool and the server in the prompt, removing the ambiguity.
-- **Inconsistent dependency detection during planning** — the planner correctly identified independent subtasks as parallelizable in some runs (three unrelated calculations all ran concurrently in one wave), but on a later run with a document search + a calculation — equally independent of each other — it marked them as sequential instead, and all 3 subtasks ran one after another rather than exploiting the concurrency the async execution layer supports. Everything still completed correctly, just slower than necessary. Left undocumented as a "fixed" issue deliberately — it's a real limitation of relying on a small local model for the planning step's dependency judgment, not a bug with a clean one-line fix, and worth knowing about rather than hiding.
 
 ## What LangGraph replaces (and what it doesn't)
 
@@ -151,42 +147,9 @@ Opens a browser UI listing all registered tools, with a form to test each one in
 
 **Verifying it's actually being used** (not just connected) turned out to be its own small investigation — Claude Desktop has its own native memory feature that can satisfy a vague "remember this" request without ever touching a connected MCP tool. The only conclusive test was writing a fact through an explicit tool call and checking `long_term_memory.json` directly on disk afterward — confirmed working end-to-end this way. See "Real bugs found while building this" above for the two issues this surfaced.
 
-## RAG (Retrieval-Augmented Generation)
-
-The agent so far only ever knows two things: whatever the model learned during training, and whatever a live tool call returns. RAG adds a third source — your own documents, searched by *meaning* rather than keyword matching, with the most relevant chunks fed into the model's context before it answers.
-
-**The mechanism, built by hand rather than via a framework helper:**
-1. **Chunk** — long documents are split into smaller pieces (`rag_ingest.py`), since embedding an entire document as one vector blurs together everything it discusses
-2. **Embed** — each chunk is converted into a vector via Ollama's `nomic-embed-text` model — a small model dedicated to representing meaning as numbers, separate from `llama3.1` which handles reasoning
-3. **Store** — vectors are persisted in [ChromaDB](https://www.trychroma.com/), a local vector database, so ingestion only has to happen once, not on every run
-4. **Retrieve** — a question is embedded the same way, and ChromaDB finds the stored chunks with the closest vectors — matching by *meaning*, so a question can retrieve the right chunk even when it shares no exact words with it
-
-**Setup:**
-```bash
-ollama pull nomic-embed-text
-pip install chromadb
-```
-
-**Ingest your documents** (put `.txt` files in `knowledge_base/`, then run):
-```bash
-python rag_ingest.py
-```
-
-**Try retrieval in isolation first:**
-```bash
-python rag_agent.py
-```
-
-**Then the full integration** — `search_documents` plugged into the complete planning + async + guardrails + observability agent from step 7, as just one more entry in the same tool-dispatch dict used since step 2:
-```bash
-python step8_rag_agent.py
-```
-
-No part of the planning, execution, retry, or logging logic needed to change to support this — that's the actual payoff of having built tools as a generic, pluggable mechanism from the start, rather than special-casing retrieval into the agent loop.
-
 ## Stack
 
-Python 3.12 · Ollama (`llama3.1` for reasoning, `nomic-embed-text` for embeddings, local) · ChromaDB (vector store) · `ddgs` (web search) · `asyncio` · FastAPI + Uvicorn (API layer) · MCP (Model Context Protocol, official Python SDK) · LangGraph (comparison only)
+Python 3.12 · Ollama (`llama3.1`, local) · `ddgs` (web search) · `asyncio` · FastAPI + Uvicorn (API layer) · MCP (Model Context Protocol, official Python SDK) · LangGraph (comparison only)
 
 ## Author
 
